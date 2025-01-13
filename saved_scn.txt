@@ -1,0 +1,248 @@
+clc, close all
+
+run_simulink = 1;
+open_simulink = 0;
+high_quality = 1;
+
+%% Robot 1
+
+trj_space   = 1; % 0:joint, 1:task (operational)
+ea_set      = 4; % 1:zxz, 2:zyz, 3:zyx, 4:xyz
+trj_type    = 2; % 1: sinusoidal, 2: p2p
+trj_profile = 3; % 1:linear, 2:cubic, 3:quintic, 4: trapez, 5: S-trapez
+ctrl_space  = 1; % 0:joint, 1:task (operational)
+ctc_switch  = 0;
+force_ffwd  = 1;
+ctrl_at_end = 1;
+orn_at_norm = 1;
+
+robot_model_1	= 2;
+ee_att_1        = 3;
+
+tfin = '25';
+tstp = '0.0001';
+
+cnc_comp = 1; % Coriolis and centrifugal torque compensation
+grv_comp = 1; % Gravitational torque compensation
+spr_comp = 1; % Spring effect compensation
+frc_comp = 0; % Joint friction compensation
+prdc_frc = 0; % Predictive friction
+
+robot_1_on = 1;
+robot_2_on = 1;
+base_on = 1;
+
+% prcnt = [0.3, 0.1];
+prcnt = [0.07, 0.05];
+if trj_space == 0 % joint space trajectory
+    qi = deg2rad([-30;60;12;-20;60;-35]);
+    qf = deg2rad([45;-35;115;40;35;15]);
+    
+    ip = qi;
+    fp = qf;
+else % task space trajectory
+    p_ei = [-0.80;1.45;1.0];
+    if ctrl_at_end == 1
+        p_ei = [-0.40;1.05;1.0];
+    else
+        p_ei = [-0.20;1.05;1.0];
+    end
+    r_ei = deg2rad([-90;00;00]);
+%     r_ei = deg2rad([-90;30;00]);
+    if trj_type ~= 1
+        p_ef = [0.10;1.55;1.2];
+        if ctrl_at_end == 1
+            p_ef = [-0.40;1.45;1.0];
+        else
+            p_ef = [-0.20;1.05;1.0];
+        end
+        r_ef = deg2rad([-90;00;00]);
+%         r_ef = deg2rad([-90;30;00]);
+    else
+        Dp = [0;-0.2;0];
+        Dr = deg2rad([0;0;0]);
+        
+        p_ef = p_ei+Dp;
+        r_ef = r_ei+Dr;
+    end
+    
+    ip = [p_ei;r_ei];
+    fp = [p_ef;r_ef];
+    
+    qi = getInitialPoints(p_ei,r_ei,robot_model_1,ee_att_1,ea_set,1);
+end
+
+if ctrl_space == 0      % joint space control
+    if ctc_switch == 0  % PID control
+        Kp = [3800;10000;7500;3000;1100;500];
+        Ki = [0;0;0;0;0;0];
+        Kd = [10;10;10;10;10;10];
+    else                % Computed torque control
+        Kp = [2250;2500;900;300;250;250];
+        Ki = [30;110;90;30;15;15];
+        Kd = [85;100;30;10;10;10];
+    end
+else                    % task space control
+    if ctc_switch == 0  % PID control
+        Kp = [2500;2500;2500;550;550;550];
+        Ki = [0;0;0;3;3;3];
+        Kd = [5;15;15;2;2;2];
+        Ki = [10;10;10;3;3;3];
+    else                % Computed torque control
+        Kp = [2550;2250;2750;1150;850;650];
+        Ki = [20;20;20;5;5;5];
+        Kd = [10;10;10;7;7;7];
+    end
+end
+Km = [1;1;1;1;1;1];
+
+switch_val = 30;
+% switch_val = 00;
+if ctrl_at_end == 1
+    if orn_at_norm == 1
+        Sx_diag = [1;1;0;1;1;1];
+        Sf_diag = [0;0;1;0;0;0];
+    else
+        Sx_diag = [1;1;0;1;1;1];
+        Sf_diag = [0;0;1;0;0;0];
+    end
+else
+    Sx_diag = [1;0;1;1;1;1];
+    Sf_diag = [0;1;0;0;0;0];
+end
+
+% Solid object stiffness
+% K = 15000; % Stifness
+K = 150000; % Stifness
+% K = 0; % Stifness
+Kc = 0.001; % Compliance (inverse of stiffness)
+% Kc = 0.05; % Compliance (inverse of stiffness)
+Kc = 0.1; % Compliance (inverse of stiffness)
+
+if ctrl_at_end == 1
+    f_des = [0;0;60;0;0;0];
+else
+    f_des = [0;60;0;0;0;0];
+end
+Kpf = [0;6;0;0;0;0];
+Kif = [0;1;0;0;0;0];
+Kdf = [0;10;0;0;0;0];
+if ctrl_at_end == 1
+    Kpf = [0;10;3;0;0;0];
+    Kif = [0;5;0.5;0;0;0];
+    Kif = [0;5;1;0;0;0];
+    Kif = [0;0;1;0;0;0];
+    Kdf = [0;0;10;0;0;0];
+else
+    Kpf = [0;9;0;0;0;0];
+    Kpf = [0;3;0;0;0;0];
+    Kif = [0;0.05;0;0;0;0];
+    Kdf = [0;10;0;0;0;0];
+end
+        
+q_posIni = qi;
+rad2deg(qi)
+
+if trj_type ~= 1
+    rpt_num = 1;
+    tf = computeTrajectoryTime(ip,fp,prcnt,trj_space,trj_profile,robot_model_1)
+else
+    rpt_num = 10;
+    period = 3;
+    rpt_num = 2;
+    period = 15;
+
+    tf = rpt_num * period
+end
+
+%% Robot 2
+
+robot_model_2 = 3;
+ee_att_2    = 4;
+
+trj_space2   = 1; % 0:joint, 1:task (operational)
+ea_set2      = 4; % 1:zxz, 2:zyz, 3:zyx, 4:xyz
+trj_type2    = 1; % 1: sinusoidal, 2: p2p
+trj_profile2 = 3; % 1:linear, 2:cubic, 3:quintic, 4: trapez, 5: S-trapez
+
+if trj_space2 == 0 % joint space trajectory
+    qi2 = deg2rad([-30;60;12;-20;60;-35]);
+    qf2 = deg2rad([45;-35;115;40;35;15]);
+    
+    ip2 = qi2;
+    fp2 = qf2;
+else % task space trajectory
+    p_ei2 = [-0.05;-0.90;1.0];
+    p_ei2 = [-0.05;-1.10;1.0];
+    r_ei2 = deg2rad([110;-20;20]);
+    r_ei2 = deg2rad([90;-30;00]);
+    r_ei2 = deg2rad([60;00;00]);
+%     r_ei2 = deg2rad([60;00;00]);
+    if trj_type2 ~= 1
+        p_ef2 = [0.85;-0.75;1.2];
+        r_ef2 = deg2rad([110;-20;20]);
+    else
+%         Dp = [0;-0.15;0];
+        Dp = [0;-0.05;0];
+        Dp = [0;0;0];
+        Dr = deg2rad([20;20;20]);
+        Dr = deg2rad([20;00;00]);
+        Dr = deg2rad([40;00;00]);
+        
+        p_ef2 = p_ei2+Dp;
+        r_ef2 = r_ei2+Dr;
+    end
+%     r_ef2 = deg2rad([110;-20;20]);
+    
+    ip2 = [p_ei2;r_ei2];
+    fp2 = [p_ef2;r_ef2];
+    
+    qi2 = getInitialPoints(p_ei2,r_ei2,robot_model_2,ee_att_2,ea_set,1)
+end
+
+q_posIni2 = qi2;
+rad2deg(qi2)
+
+if trj_type2 ~= 1
+    rpt_num = 1;
+    tf2 = computeTrajectoryTime(ip2,fp2,prcnt,trj_space2,trj_profile2,robot_model_2)
+else
+    rpt_num2 = 10;
+    period2 = 3;
+
+    tf2 = rpt_num2 * period2
+end
+
+no_trj = 1;
+no_trj2 = 1;
+% ip2 = deg2rad([0;0;0;0;0;0]);
+% tf = 0.0001;
+% tf2 = 0.0001;
+% 
+%         Kp = [0;0;0;0;0;0];
+%         Ki = [0;0;0;0;0;0];
+%         Kd = [0;0;0;0;0;0];
+%         
+% Kpf = [0;0;0;0;0;0];
+% Kif = [0;0.00;0;0;0;0];
+% Kdf = [0;00;0;0;0;0];
+% 
+% cnc_comp = 0; % Coriolis and centrifugal torque compensation
+% grv_comp = 0; % Gravitational torque compensation
+% spr_comp = 1; % Spring effect compensation
+
+%% Simulink commands
+
+if open_simulink == 1
+    open_system('sim_rx160_two')
+end
+
+if run_simulink == 1
+    model = 'sim_rx160_two';
+    load_system(model)
+    out = sim(model,'StartTime','0','StopTime',tfin,'FixedStep',tstp); % sim('modelName','StartTime','0','StopTime','10','FixedStep','0.2');
+end
+
+if animation_on == 1 && exist('out','var') == 1
+    animate_sim(robot_model_1,ee_att_1,robot_model_2,ee_att_2,high_quality,robot_1_on,robot_2_on,base_on,out)
+end
